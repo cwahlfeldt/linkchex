@@ -81,6 +81,40 @@ go build -o linkchex ./cmd/linkchex
 
 # Exclude URLs matching pattern (Phase 3)
 ./linkchex --sitemap test-sitemap.xml --exclude "*/admin/*"
+
+# FAST: For large sitemaps (500+ pages)
+./linkchex --sitemap large-sitemap.xml --concurrency 200 --progress
+```
+
+### Performance Tuning
+
+For **large sitemaps** (500+ pages with duplicate links):
+
+```bash
+# Maximum speed (internal links only)
+./linkchex --sitemap your-sitemap.xml \
+  --concurrency 200 \
+  --timeout 10 \
+  --retries 1 \
+  --progress
+
+# Run benchmark to find optimal concurrency
+./benchmark.sh your-sitemap.xml
+```
+
+**Key Performance Tips:**
+- 🚀 **Increase concurrency**: Use `--concurrency 200` for 4x speed boost
+- 💾 **Caching**: Duplicate URLs validated only once (automatic)
+- ⚡ **Fast fail**: Use `--retries 1` to fail faster
+- 📊 **Monitor**: Use `--progress` to see real-time speed (links/sec)
+
+Example: 581 pages × 80 links = 46,480 checks
+- With 80% duplicates → Only ~9,000 unique validations needed
+- Default (50 workers): ~3-5 minutes
+- Optimized (200 workers): ~30-90 seconds
+
+See [PERFORMANCE-TUNING.md](PERFORMANCE-TUNING.md) for detailed guide.
+
 ```
 
 ### CLI Flags
