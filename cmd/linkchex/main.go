@@ -15,7 +15,7 @@ func main() {
 	// Define CLI flags
 	url := flag.String("url", "", "Base URL to discover sitemap from")
 	sitemapURL := flag.String("sitemap", "", "Direct URL or path to sitemap file")
-	concurrency := flag.Int("concurrency", 200, "Number of concurrent workers")
+	concurrency := flag.Int("concurrency", 400, "Number of concurrent workers")
 	verbose := flag.Bool("verbose", false, "Enable verbose output")
 	versionFlag := flag.Bool("version", false, "Show version information")
 	timeout := flag.Int("timeout", 10, "Request timeout in seconds")
