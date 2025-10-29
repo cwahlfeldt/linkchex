@@ -8,10 +8,11 @@ import (
 
 // Client wraps an HTTP client with retry logic and timeouts
 type Client struct {
-	httpClient *http.Client
-	maxRetries int
-	retryDelay time.Duration
-	userAgent  string
+	httpClient  *http.Client
+	maxRetries  int
+	retryDelay  time.Duration
+	userAgent   string
+	rateLimiter *RateLimiter
 }
 
 // NewClient creates a new HTTP client with the specified configuration
@@ -27,10 +28,19 @@ func NewClient(timeout int, maxRetries int) *Client {
 				return nil
 			},
 		},
-		maxRetries: maxRetries,
-		retryDelay: 1 * time.Second,
-		userAgent:  "Linkchex/0.1.0 (Link Validator)",
+		maxRetries:  maxRetries,
+		retryDelay:  1 * time.Second,
+		userAgent:   "Linkchex/0.1.0 (Link Validator)",
+		rateLimiter: NewRateLimiter(0), // No rate limiting by default
 	}
+}
+
+// SetRateLimit sets the rate limit for requests (requests per second)
+func (c *Client) SetRateLimit(requestsPerSecond float64) {
+	if c.rateLimiter != nil {
+		c.rateLimiter.Stop()
+	}
+	c.rateLimiter = NewRateLimiter(requestsPerSecond)
 }
 
 // Response contains the result of an HTTP request
@@ -53,6 +63,11 @@ func (c *Client) Get(url string) *Response {
 		if attempt > 0 {
 			// Wait before retrying
 			time.Sleep(c.retryDelay * time.Duration(attempt))
+		}
+
+		// Apply rate limiting
+		if c.rateLimiter != nil {
+			c.rateLimiter.Wait()
 		}
 
 		req, err := http.NewRequest("GET", url, nil)
@@ -113,6 +128,11 @@ func (c *Client) Head(url string) *Response {
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(c.retryDelay * time.Duration(attempt))
+		}
+
+		// Apply rate limiting
+		if c.rateLimiter != nil {
+			c.rateLimiter.Wait()
 		}
 
 		req, err := http.NewRequest("HEAD", url, nil)

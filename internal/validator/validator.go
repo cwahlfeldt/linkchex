@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"linkchex/internal/fetcher"
+	"github.com/schollz/progressbar/v3"
 )
 
 // Result represents the validation result for a single URL
@@ -24,31 +25,68 @@ type Result struct {
 
 // ValidationReport contains all validation results
 type ValidationReport struct {
-	Results       []Result
-	TotalLinks    int
-	BrokenLinks   int
-	WarningLinks  int
-	SuccessLinks  int
-	ExternalLinks int
-	StartTime     time.Time
-	EndTime       time.Time
-	Duration      time.Duration
+	Results        []Result
+	TotalLinks     int
+	BrokenLinks    int
+	WarningLinks   int
+	SuccessLinks   int
+	ExternalLinks  int
+	InternalLinks  int
+	CachedLinks    int
+	UniqueURLs     int
+	PagesProcessed int
+	StartTime      time.Time
+	EndTime        time.Time
+	Duration       time.Duration
+	LinksByTag     map[string]int // Count of links by tag type
+	LinksByStatus  map[int]int    // Count of links by status code
 }
 
 // Validator validates links from pages
 type Validator struct {
-	client      *fetcher.Client
-	concurrency int
-	verbose     bool
+	client       *fetcher.Client
+	concurrency  int
+	verbose      bool
+	showProgress bool
+	urlCache     map[string]*Result
+	cacheMutex   sync.RWMutex
+	urlMatcher   *URLMatcher
 }
 
 // NewValidator creates a new link validator
 func NewValidator(timeout, maxRetries, concurrency int, verbose bool) *Validator {
 	return &Validator{
-		client:      fetcher.NewClient(timeout, maxRetries),
-		concurrency: concurrency,
-		verbose:     verbose,
+		client:       fetcher.NewClient(timeout, maxRetries),
+		concurrency:  concurrency,
+		verbose:      verbose,
+		showProgress: !verbose, // Show progress bar only when not verbose
+		urlCache:     make(map[string]*Result),
 	}
+}
+
+// SetShowProgress controls whether to show progress bar
+func (v *Validator) SetShowProgress(show bool) {
+	v.showProgress = show
+}
+
+// SetExcludePatterns sets URL patterns to exclude from validation
+func (v *Validator) SetExcludePatterns(patterns []string) error {
+	matcher, err := NewURLMatcher(patterns, nil)
+	if err != nil {
+		return err
+	}
+	v.urlMatcher = matcher
+	return nil
+}
+
+// SetURLMatcher sets a custom URL matcher
+func (v *Validator) SetURLMatcher(matcher *URLMatcher) {
+	v.urlMatcher = matcher
+}
+
+// SetRateLimit sets the rate limit for HTTP requests (requests per second)
+func (v *Validator) SetRateLimit(requestsPerSecond float64) {
+	v.client.SetRateLimit(requestsPerSecond)
 }
 
 // ValidatePage fetches a page and validates all links on it
@@ -90,6 +128,25 @@ func (v *Validator) validateLinks(sourceURL string, links []fetcher.Link) []Resu
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, v.concurrency)
 
+	// Create progress bar if enabled
+	var bar *progressbar.ProgressBar
+	if v.showProgress && len(links) > 0 {
+		bar = progressbar.NewOptions(len(links),
+			progressbar.OptionEnableColorCodes(true),
+			progressbar.OptionSetDescription("[cyan]Validating links...[reset]"),
+			progressbar.OptionSetWidth(50),
+			progressbar.OptionShowCount(),
+			progressbar.OptionShowIts(),
+			progressbar.OptionSetTheme(progressbar.Theme{
+				Saucer:        "[green]=[reset]",
+				SaucerHead:    "[green]>[reset]",
+				SaucerPadding: " ",
+				BarStart:      "[",
+				BarEnd:        "]",
+			}),
+		)
+	}
+
 	for i, link := range links {
 		wg.Add(1)
 		go func(idx int, l fetcher.Link) {
@@ -98,15 +155,54 @@ func (v *Validator) validateLinks(sourceURL string, links []fetcher.Link) []Resu
 			defer func() { <-semaphore }() // Release
 
 			results[idx] = v.validateLink(sourceURL, l)
+
+			if bar != nil {
+				bar.Add(1)
+			}
 		}(i, link)
 	}
 
 	wg.Wait()
+
+	if bar != nil {
+		bar.Finish()
+		fmt.Println() // Add newline after progress bar
+	}
+
 	return results
 }
 
 // validateLink validates a single link
 func (v *Validator) validateLink(sourceURL string, link fetcher.Link) Result {
+	// Check if URL should be validated
+	if v.urlMatcher != nil && !v.urlMatcher.ShouldCheck(link.URL) {
+		return Result{
+			SourceURL:  sourceURL,
+			TargetURL:  link.URL,
+			StatusCode: 0,
+			Status:     "Skipped (excluded by pattern)",
+			Error:      nil,
+			IsExternal: link.IsExternal,
+			Tag:        link.Tag,
+			LinkText:   link.Text,
+			Duration:   0,
+			IsBroken:   false,
+		}
+	}
+
+	// Check cache first
+	v.cacheMutex.RLock()
+	if cached, found := v.urlCache[link.URL]; found {
+		v.cacheMutex.RUnlock()
+		// Return cached result with updated source
+		cachedCopy := *cached
+		cachedCopy.SourceURL = sourceURL
+		cachedCopy.Tag = link.Tag
+		cachedCopy.LinkText = link.Text
+		return cachedCopy
+	}
+	v.cacheMutex.RUnlock()
+
 	// Use HEAD request for efficiency
 	resp := v.client.Head(link.URL)
 
@@ -132,19 +228,29 @@ func (v *Validator) validateLink(sourceURL string, link fetcher.Link) Result {
 		result.IsBroken = false
 	}
 
+	// Cache the result
+	v.cacheMutex.Lock()
+	v.urlCache[link.URL] = &result
+	v.cacheMutex.Unlock()
+
 	return result
 }
 
 // ValidateMultiplePages validates links from multiple pages
 func (v *Validator) ValidateMultiplePages(pageURLs []string, checkExternal bool) *ValidationReport {
 	report := &ValidationReport{
-		Results:   make([]Result, 0),
-		StartTime: time.Now(),
+		Results:      make([]Result, 0),
+		StartTime:    time.Now(),
+		LinksByTag:   make(map[string]int),
+		LinksByStatus: make(map[int]int),
 	}
 
 	if v.verbose {
 		fmt.Printf("\nValidating %d pages...\n\n", len(pageURLs))
 	}
+
+	report.PagesProcessed = len(pageURLs)
+	uniqueURLs := make(map[string]bool)
 
 	for i, pageURL := range pageURLs {
 		if v.verbose {
@@ -181,6 +287,11 @@ func (v *Validator) ValidateMultiplePages(pageURLs []string, checkExternal bool)
 	// Calculate statistics
 	for _, result := range report.Results {
 		report.TotalLinks++
+
+		// Track unique URLs
+		uniqueURLs[result.TargetURL] = true
+
+		// Categorize by status
 		if result.IsBroken {
 			report.BrokenLinks++
 		} else if result.StatusCode >= 300 && result.StatusCode < 400 {
@@ -188,10 +299,32 @@ func (v *Validator) ValidateMultiplePages(pageURLs []string, checkExternal bool)
 		} else {
 			report.SuccessLinks++
 		}
+
+		// Count internal vs external
 		if result.IsExternal {
 			report.ExternalLinks++
+		} else {
+			report.InternalLinks++
+		}
+
+		// Count by tag type
+		if result.Tag != "" {
+			report.LinksByTag[result.Tag]++
+		}
+
+		// Count by status code
+		if result.StatusCode > 0 {
+			report.LinksByStatus[result.StatusCode]++
 		}
 	}
+
+	// Track unique URLs count
+	report.UniqueURLs = len(uniqueURLs)
+
+	// Track cached links
+	v.cacheMutex.RLock()
+	report.CachedLinks = len(v.urlCache)
+	v.cacheMutex.RUnlock()
 
 	return report
 }

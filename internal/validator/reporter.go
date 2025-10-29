@@ -32,12 +32,25 @@ func formatText(report *ValidationReport) string {
 	sb.WriteString("======================\n\n")
 
 	// Summary
-	sb.WriteString(fmt.Sprintf("Total Links:    %d\n", report.TotalLinks))
-	sb.WriteString(fmt.Sprintf("✓ Success:      %d (%.1f%%)\n", report.SuccessLinks, percentage(report.SuccessLinks, report.TotalLinks)))
-	sb.WriteString(fmt.Sprintf("✗ Broken:       %d (%.1f%%)\n", report.BrokenLinks, percentage(report.BrokenLinks, report.TotalLinks)))
-	sb.WriteString(fmt.Sprintf("⚠ Warnings:     %d (%.1f%%)\n", report.WarningLinks, percentage(report.WarningLinks, report.TotalLinks)))
-	sb.WriteString(fmt.Sprintf("External Links: %d\n", report.ExternalLinks))
-	sb.WriteString(fmt.Sprintf("Duration:       %s\n\n", report.Duration.Round(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("Pages Processed:   %d\n", report.PagesProcessed))
+	sb.WriteString(fmt.Sprintf("Total Links:       %d\n", report.TotalLinks))
+	sb.WriteString(fmt.Sprintf("Unique URLs:       %d\n", report.UniqueURLs))
+	sb.WriteString(fmt.Sprintf("✓ Success:         %d (%.1f%%)\n", report.SuccessLinks, percentage(report.SuccessLinks, report.TotalLinks)))
+	sb.WriteString(fmt.Sprintf("✗ Broken:          %d (%.1f%%)\n", report.BrokenLinks, percentage(report.BrokenLinks, report.TotalLinks)))
+	sb.WriteString(fmt.Sprintf("⚠ Warnings:        %d (%.1f%%)\n", report.WarningLinks, percentage(report.WarningLinks, report.TotalLinks)))
+	sb.WriteString(fmt.Sprintf("Internal Links:    %d\n", report.InternalLinks))
+	sb.WriteString(fmt.Sprintf("External Links:    %d\n", report.ExternalLinks))
+	sb.WriteString(fmt.Sprintf("Cached Results:    %d\n", report.CachedLinks))
+	sb.WriteString(fmt.Sprintf("Duration:          %s\n\n", report.Duration.Round(time.Millisecond)))
+
+	// Links by tag type
+	if len(report.LinksByTag) > 0 {
+		sb.WriteString("Links by Type:\n")
+		for tag, count := range report.LinksByTag {
+			sb.WriteString(fmt.Sprintf("  <%s>: %d\n", tag, count))
+		}
+		sb.WriteString("\n")
+	}
 
 	// Broken links details
 	if report.BrokenLinks > 0 {
