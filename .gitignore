@@ -1,5 +1,6 @@
 # Binaries
 linkchex
+!cmd/linkchex
 *.exe
 *.exe~
 *.dll
