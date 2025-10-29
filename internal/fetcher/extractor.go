@@ -17,7 +17,7 @@ type Link struct {
 }
 
 // ExtractLinks extracts all links from HTML content
-func ExtractLinks(htmlContent []byte, baseURL string) ([]Link, error) {
+func ExtractLinks(htmlContent []byte, baseURL string, skipResources bool) ([]Link, error) {
 	doc, err := html.Parse(strings.NewReader(string(htmlContent)))
 	if err != nil {
 		return nil, err
@@ -54,6 +54,9 @@ func ExtractLinks(htmlContent []byte, baseURL string) ([]Link, error) {
 					}
 				}
 			case "link":
+				if skipResources {
+					break // Skip <link> tags if skipResources is true
+				}
 				if href := getAttr(n, "href"); href != "" {
 					link = Link{
 						URL:  href,
@@ -62,6 +65,9 @@ func ExtractLinks(htmlContent []byte, baseURL string) ([]Link, error) {
 					}
 				}
 			case "script":
+				if skipResources {
+					break // Skip <script> tags if skipResources is true
+				}
 				if src := getAttr(n, "src"); src != "" {
 					link = Link{
 						URL:  src,

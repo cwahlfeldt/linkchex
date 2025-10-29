@@ -35,6 +35,7 @@ type ValidationReport struct {
 	CachedLinks    int
 	UniqueURLs     int
 	PagesProcessed int
+	CheckExternal  bool          // Whether external links were checked
 	StartTime      time.Time
 	EndTime        time.Time
 	Duration       time.Duration
@@ -44,13 +45,14 @@ type ValidationReport struct {
 
 // Validator validates links from pages
 type Validator struct {
-	client       *fetcher.Client
-	concurrency  int
-	verbose      bool
-	showProgress bool
-	urlCache     map[string]*Result
-	cacheMutex   sync.RWMutex
-	urlMatcher   *URLMatcher
+	client        *fetcher.Client
+	concurrency   int
+	verbose       bool
+	showProgress  bool
+	skipResources bool
+	urlCache      map[string]*Result
+	cacheMutex    sync.RWMutex
+	urlMatcher    *URLMatcher
 }
 
 // NewValidator creates a new link validator
@@ -67,6 +69,11 @@ func NewValidator(timeout, maxRetries, concurrency int, verbose bool) *Validator
 // SetShowProgress controls whether to show progress bar
 func (v *Validator) SetShowProgress(show bool) {
 	v.showProgress = show
+}
+
+// SetSkipResources controls whether to skip <link> and <script> tag validation
+func (v *Validator) SetSkipResources(skip bool) {
+	v.skipResources = skip
 }
 
 // SetExcludePatterns sets URL patterns to exclude from validation
@@ -91,6 +98,11 @@ func (v *Validator) SetRateLimit(requestsPerSecond float64) {
 
 // ValidatePage fetches a page and validates all links on it
 func (v *Validator) ValidatePage(pageURL string, checkExternal bool) ([]Result, error) {
+	return v.validatePageInternal(pageURL, checkExternal, true)
+}
+
+// validatePageInternal is the internal implementation with control over progress bar
+func (v *Validator) validatePageInternal(pageURL string, checkExternal bool, showProgress bool) ([]Result, error) {
 	if v.verbose {
 		fmt.Printf("Fetching page: %s\n", pageURL)
 	}
@@ -106,7 +118,7 @@ func (v *Validator) ValidatePage(pageURL string, checkExternal bool) ([]Result, 
 	}
 
 	// Extract links
-	links, err := fetcher.ExtractLinks(resp.Body, pageURL)
+	links, err := fetcher.ExtractLinks(resp.Body, pageURL, v.skipResources)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract links: %w", err)
 	}
@@ -119,18 +131,23 @@ func (v *Validator) ValidatePage(pageURL string, checkExternal bool) ([]Result, 
 	}
 
 	// Validate links concurrently
-	return v.validateLinks(pageURL, links), nil
+	return v.validateLinksInternal(pageURL, links, showProgress), nil
 }
 
 // validateLinks validates multiple links concurrently
 func (v *Validator) validateLinks(sourceURL string, links []fetcher.Link) []Result {
+	return v.validateLinksInternal(sourceURL, links, v.showProgress)
+}
+
+// validateLinksInternal validates multiple links concurrently with control over progress bar
+func (v *Validator) validateLinksInternal(sourceURL string, links []fetcher.Link, showProgress bool) []Result {
 	results := make([]Result, len(links))
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, v.concurrency)
 
 	// Create progress bar if enabled
 	var bar *progressbar.ProgressBar
-	if v.showProgress && len(links) > 0 {
+	if showProgress && len(links) > 0 {
 		bar = progressbar.NewOptions(len(links),
 			progressbar.OptionEnableColorCodes(true),
 			progressbar.OptionSetDescription("[cyan]Validating links...[reset]"),
@@ -243,6 +260,7 @@ func (v *Validator) ValidateMultiplePages(pageURLs []string, checkExternal bool)
 		StartTime:    time.Now(),
 		LinksByTag:   make(map[string]int),
 		LinksByStatus: make(map[int]int),
+		CheckExternal: checkExternal,
 	}
 
 	if v.verbose {
@@ -252,33 +270,75 @@ func (v *Validator) ValidateMultiplePages(pageURLs []string, checkExternal bool)
 	report.PagesProcessed = len(pageURLs)
 	uniqueURLs := make(map[string]bool)
 
-	for i, pageURL := range pageURLs {
-		if v.verbose {
-			fmt.Printf("[%d/%d] Validating: %s\n", i+1, len(pageURLs), pageURL)
-		}
+	// Process pages concurrently (but limit to reasonable number)
+	type pageResult struct {
+		results []Result
+		err     error
+		pageURL string
+		index   int
+	}
 
-		results, err := v.ValidatePage(pageURL, checkExternal)
-		if err != nil {
+	resultsChan := make(chan pageResult, len(pageURLs))
+	var wg sync.WaitGroup
+	// Limit concurrent page fetches to avoid overwhelming the server
+	// Use min of 10 or number of pages
+	pageConcurrency := 10
+	if len(pageURLs) < pageConcurrency {
+		pageConcurrency = len(pageURLs)
+	}
+	semaphore := make(chan struct{}, pageConcurrency)
+
+	// Launch concurrent page processors
+	for i, pageURL := range pageURLs {
+		wg.Add(1)
+		go func(idx int, url string) {
+			defer wg.Done()
+			semaphore <- struct{}{}        // Acquire
+			defer func() { <-semaphore }() // Release
+
 			if v.verbose {
-				fmt.Printf("  ⚠ Error validating page: %v\n", err)
+				fmt.Printf("[%d/%d] Validating: %s\n", idx+1, len(pageURLs), url)
+			}
+
+			results, err := v.validatePageInternal(url, checkExternal, false) // No progress bar per page
+			resultsChan <- pageResult{
+				results: results,
+				err:     err,
+				pageURL: url,
+				index:   idx,
+			}
+
+			if v.verbose && err == nil {
+				fmt.Printf("  Found %d links\n", len(results))
+			}
+		}(i, pageURL)
+	}
+
+	// Wait for all pages to complete
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	// Collect results
+	for pr := range resultsChan {
+		if pr.err != nil {
+			if v.verbose {
+				fmt.Printf("  ⚠ Error validating page: %v\n", pr.err)
 			}
 			// Create a result for the page itself
 			report.Results = append(report.Results, Result{
 				SourceURL:  "sitemap",
-				TargetURL:  pageURL,
+				TargetURL:  pr.pageURL,
 				StatusCode: 0,
 				Status:     "Failed",
-				Error:      err,
+				Error:      pr.err,
 				IsBroken:   true,
 			})
 			continue
 		}
 
-		report.Results = append(report.Results, results...)
-
-		if v.verbose {
-			fmt.Printf("  Found %d links\n", len(results))
-		}
+		report.Results = append(report.Results, pr.results...)
 	}
 
 	report.EndTime = time.Now()

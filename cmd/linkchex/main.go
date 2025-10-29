@@ -15,18 +15,19 @@ func main() {
 	// Define CLI flags
 	url := flag.String("url", "", "Base URL to discover sitemap from")
 	sitemapURL := flag.String("sitemap", "", "Direct URL or path to sitemap file")
-	concurrency := flag.Int("concurrency", 400, "Number of concurrent workers")
+	concurrency := flag.Int("concurrency", 200, "Number of concurrent workers")
 	verbose := flag.Bool("verbose", false, "Enable verbose output")
 	versionFlag := flag.Bool("version", false, "Show version information")
 	timeout := flag.Int("timeout", 10, "Request timeout in seconds")
 	format := flag.String("format", "text", "Output format (text, json, csv)")
 	output := flag.String("output", "", "Output file path (default: stdout)")
 	maxRetries := flag.Int("retries", 1, "Maximum number of retries for failed requests")
-	checkExternal := flag.Bool("check-external", false, "Check external links (default: internal only)")
+	checkExternal := flag.Bool("check-external", true, "Check external links (default: internal only)")
 	listOnly := flag.Bool("list-only", false, "Only list URLs from sitemap without validating links")
 	rateLimit := flag.Float64("rate-limit", 0, "Rate limit in requests per second (0 = unlimited)")
 	excludePattern := flag.String("exclude", "", "Exclude URLs matching pattern (supports * and ? wildcards)")
 	showProgress := flag.Bool("progress", false, "Show progress bar (auto-disabled with --verbose)")
+	skipResources := flag.Bool("skip-resources", false, "Skip checking <link> and <script> tags (check only <a> and <img>)")
 
 	flag.Parse()
 
@@ -64,6 +65,7 @@ func main() {
 		RateLimit:      *rateLimit,
 		ExcludePattern: *excludePattern,
 		ShowProgress:   *showProgress,
+		SkipResources:  *skipResources,
 	}
 
 	if err := run(config); err != nil {
@@ -86,6 +88,7 @@ type Config struct {
 	RateLimit      float64
 	ExcludePattern string
 	ShowProgress   bool
+	SkipResources  bool
 }
 
 func run(config *Config) error {
@@ -180,6 +183,14 @@ func run(config *Config) error {
 	// Set progress bar visibility
 	if config.ShowProgress && !config.Verbose {
 		v.SetShowProgress(true)
+	}
+
+	// Set skip resources flag
+	if config.SkipResources {
+		if config.Verbose {
+			fmt.Println("Skipping <link> and <script> tag validation")
+		}
+		v.SetSkipResources(true)
 	}
 
 	report := v.ValidateMultiplePages(allURLs, config.CheckExternal)

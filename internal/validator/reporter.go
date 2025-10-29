@@ -39,7 +39,11 @@ func formatText(report *ValidationReport) string {
 	sb.WriteString(fmt.Sprintf("✗ Broken:          %d (%.1f%%)\n", report.BrokenLinks, percentage(report.BrokenLinks, report.TotalLinks)))
 	sb.WriteString(fmt.Sprintf("⚠ Warnings:        %d (%.1f%%)\n", report.WarningLinks, percentage(report.WarningLinks, report.TotalLinks)))
 	sb.WriteString(fmt.Sprintf("Internal Links:    %d\n", report.InternalLinks))
-	sb.WriteString(fmt.Sprintf("External Links:    %d\n", report.ExternalLinks))
+	if report.CheckExternal {
+		sb.WriteString(fmt.Sprintf("External Links:    %d\n", report.ExternalLinks))
+	} else {
+		sb.WriteString(fmt.Sprintf("External Links:    %d (not checked - use --check-external to validate)\n", report.ExternalLinks))
+	}
 	sb.WriteString(fmt.Sprintf("Cached Results:    %d\n", report.CachedLinks))
 	sb.WriteString(fmt.Sprintf("Duration:          %s\n\n", report.Duration.Round(time.Millisecond)))
 

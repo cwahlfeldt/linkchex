@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -17,9 +18,18 @@ type Client struct {
 
 // NewClient creates a new HTTP client with the specified configuration
 func NewClient(timeout int, maxRetries int) *Client {
+	// Configure transport for better connection handling
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		DisableKeepAlives:   false,
+	}
+
 	return &Client{
 		httpClient: &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
+			Timeout:   time.Duration(timeout) * time.Second,
+			Transport: transport,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				// Limit redirects to 10
 				if len(via) >= 10 {
@@ -88,10 +98,8 @@ func (c *Client) Get(url string) *Response {
 		body := make([]byte, 0)
 		if resp.Body != nil {
 			defer resp.Body.Close()
-			// Read up to 10MB
-			body = make([]byte, 10*1024*1024)
-			n, _ := resp.Body.Read(body)
-			body = body[:n]
+			// Read response body efficiently
+			body, _ = io.ReadAll(resp.Body)
 		}
 
 		duration := time.Since(startTime)

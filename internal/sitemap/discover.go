@@ -42,12 +42,22 @@ func Discover(baseURL string) ([]string, error) {
 			"/sitemap/index.xml",
 		}
 
+		var lastErr error
 		for _, path := range commonPaths {
 			sitemapURL := baseURL + path
-			if exists, err := urlExists(sitemapURL); err == nil && exists {
+			exists, err := urlExists(sitemapURL)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if exists {
 				sitemaps = append(sitemaps, sitemapURL)
 				break // Found one, stop searching
 			}
+		}
+
+		if len(sitemaps) == 0 && lastErr != nil {
+			return nil, fmt.Errorf("no sitemap found at %s (last error: %v)", baseURL, lastErr)
 		}
 	}
 
@@ -98,7 +108,7 @@ func checkRobotsTxt(baseURL string) ([]string, error) {
 	return sitemaps, nil
 }
 
-// urlExists checks if a URL returns a 200 status code
+// urlExists checks if a URL returns a successful status code
 func urlExists(urlStr string) (bool, error) {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -120,5 +130,11 @@ func urlExists(urlStr string) (bool, error) {
 		defer resp.Body.Close()
 	}
 
-	return resp.StatusCode == http.StatusOK, nil
+	// Return error for rate limiting so caller knows what happened
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return false, fmt.Errorf("rate limited (429)")
+	}
+
+	// Accept 2xx status codes as success
+	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
 }
