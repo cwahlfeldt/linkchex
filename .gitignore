@@ -34,3 +34,5 @@ results.*
 
 # Keep test files
 !test-*.xml
+*.html
+.old

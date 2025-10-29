@@ -28,6 +28,7 @@ func main() {
 	excludePattern := flag.String("exclude", "", "Exclude URLs matching pattern (supports * and ? wildcards)")
 	showProgress := flag.Bool("progress", false, "Show progress bar (auto-disabled with --verbose)")
 	skipResources := flag.Bool("skip-resources", false, "Skip checking <link> and <script> tags (check only <a> and <img>)")
+	htmlOutput := flag.String("html", "", "Generate interactive HTML report at specified path (e.g., report.html)")
 
 	flag.Parse()
 
@@ -66,6 +67,7 @@ func main() {
 		ExcludePattern: *excludePattern,
 		ShowProgress:   *showProgress,
 		SkipResources:  *skipResources,
+		HTMLOutput:     *htmlOutput,
 	}
 
 	if err := run(config); err != nil {
@@ -89,6 +91,7 @@ type Config struct {
 	ExcludePattern string
 	ShowProgress   bool
 	SkipResources  bool
+	HTMLOutput     string
 }
 
 func run(config *Config) error {
@@ -212,6 +215,16 @@ func run(config *Config) error {
 	} else {
 		// Write to stdout
 		fmt.Println(reportText)
+	}
+
+	// Generate HTML report if requested
+	if config.HTMLOutput != "" {
+		if err := validator.WriteHTMLReport(report, config.HTMLOutput); err != nil {
+			return fmt.Errorf("failed to write HTML report: %w", err)
+		}
+		if config.Verbose || config.Output == "" {
+			fmt.Printf("HTML report written to: %s\n", config.HTMLOutput)
+		}
 	}
 
 	// Exit with error code if broken links found
